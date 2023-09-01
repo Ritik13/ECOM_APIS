@@ -5,36 +5,14 @@ import (
 	"ecom/models"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
+	"ecom/database"
+
 	"github.com/golang-jwt/jwt/v5"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/bson"
 )
-
-type User struct {
-	Id       string `json:"_id"`
-	Name     string `json:"name"`
-	Age      int    `json:"age"`
-	Password string `json:"password"`
-	Email    string `json:"email"`
-}
-
-type LoginType struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-var mockUser = []User{
-	{
-		Id:       "jkwnf(fjhbew)",
-		Name:     "Ritik",
-		Email:    "r@g.com",
-		Password: "acb",
-	},
-}
 
 type Response struct {
 	Status  string `json:"status"`
@@ -48,39 +26,12 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-const connectionString = "mongodb+srv://ritik:bY1MUy916TmqCu4o@golangdb.gqx5mtp.mongodb.net/?retryWrites=true&w=majority"
+// contexts
 
-const dbName = "Ecom Apis"
-
-// Most important
-
-var collection *mongo.Collection
-
-func init() {
-	clientOptions := options.Client().ApplyURI(connectionString)
-	// connnect to mongoDb
-
-	client, err := mongo.Connect(context.TODO(), clientOptions)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("MongoDB connection succeeded")
-
-	collection = client.Database(dbName).Collection(dbName)
-
-	// collection instance
-
-	fmt.Println("collection instance ready")
-}
-
-func insertOneUser(user models.User) {
-	insert, err := collection.InsertOne(context.Background(), user)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println("User add succesful with id  ", insert.InsertedID)
+func insertOneUser(user models.User) (string, error) {
+	ctx := context.Background()
+	_, err := database.UserCollection.InsertOne(ctx, user)
+	return "User Added successfully", err
 }
 
 // docs followed
@@ -131,27 +82,22 @@ func authProtector(token string) bool {
 
 func UserLogin(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	var data LoginType
+	var data models.User
 	err := json.NewDecoder(r.Body).Decode(&data)
+	fmt.Println(data)
 
 	if err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-
-	var dbUser User
-	// Process the data in 'data'
-	for _, current := range mockUser {
-		if current.Email == data.Email && current.Password == data.Password {
-			fmt.Println("Match found:", current)
-			dbUser = current
-		}
-	}
+	filterBy := bson.M{"email": data.Email}
+	var result models.User
+	fmt.Println(result, data.Email)
+	database.UserCollection.FindOne(context.TODO(), filterBy).Decode(&result)
 
 	// if no user found
-	if dbUser == (User{}) {
+	if result == (models.User{}) {
 		w.WriteHeader(http.StatusBadRequest)
-
 		response := Response{
 			Status:  "eror",
 			Message: "user Not Found",
@@ -168,35 +114,41 @@ func UserLogin(w http.ResponseWriter, r *http.Request) {
 
 	// generateToken
 
-	tokenString, _ := generateToken(dbUser.Name)
+	tokenString, _ := generateToken(result.Name)
 	response := map[string]interface{}{
 		"token": tokenString,
-		"user":  dbUser,
+		"user":  result,
 	}
 	json.NewEncoder(w).Encode(response)
 }
 
-func registerUser(w http.ResponseWriter, r *http.Request) {
-	var newUser User
-	fmt.Println("user")
-	err := json.NewDecoder(r.Body).Decode(&newUser)
+func RegisterUser(w http.ResponseWriter, r *http.Request) {
+	var newUser models.User
+	// convert body in json
+	jsonError := json.NewDecoder(r.Body).Decode(&newUser)
 
-	if err != nil {
-		http.Error(w, "Invalid User data ", http.StatusBadRequest)
+	if jsonError != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
 	}
 
-	insertOneUser(newUser)
+	var response Response
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 
-	// output
-	response := Response{
-		Status:  "success",
-		Message: "user created succesfully",
-	}
-
-	for index, current := range mockUser {
-		fmt.Println(index, " this is val", current)
+	_, dbOperationError := insertOneUser(newUser)
+	if dbOperationError != nil {
+		fmt.Println(dbOperationError)
+		w.WriteHeader(http.StatusBadRequest)
+		response = Response{
+			Status:  "error",
+			Message: "Can not register user!",
+		}
+	} else {
+		w.WriteHeader(http.StatusOK)
+		response = Response{
+			Status:  "success",
+			Message: "user created succesfully",
+		}
 	}
 	val, _ := json.Marshal(response)
 	w.Write(val)
